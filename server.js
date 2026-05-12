@@ -4,7 +4,6 @@ const express = require("express");
 const path = require("path");
 const fs = require("fs/promises");
 const cors = require("cors");
-const twilio = require("twilio");
 const { v4: uuidv4 } = require("uuid");
 
 const app = express();
@@ -13,16 +12,6 @@ const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, "public");
 const DATA_DIR = path.join(__dirname, "data");
 const DONORS_FILE = path.join(DATA_DIR, "donors.json");
-
-const twilioConfigured =
-  process.env.TWILIO_ACCOUNT_SID &&
-  process.env.TWILIO_AUTH_TOKEN &&
-  process.env.TWILIO_PHONE_NUMBER;
-
-const verifyConfigured = twilioConfigured && process.env.TWILIO_VERIFY_SERVICE_SID;
-const twilioClient = twilioConfigured
-  ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
-  : null;
 
 app.use(cors());
 app.use(express.json());
@@ -87,13 +76,28 @@ function emergencyMessage({ requesterName, requesterPhone, bloodType, hospital, 
   return parts.filter(Boolean).join(" ");
 }
 
+function sanitizePhone(to) {
+  return String(to || "").trim().replace(/\s+/g, "");
+}
+
 function manualSmsResponse(to, body) {
+  const phone = sanitizePhone(to);
   return {
     success: true,
     manual: true,
-    to,
+    to: phone,
     body,
-    smsUrl: `sms:${encodeURIComponent(to)}?body=${encodeURIComponent(body)}`,
+    smsUrl: `sms:${phone}?body=${encodeURIComponent(body)}`,
+  };
+}
+
+function manualCallResponse(to) {
+  const phone = sanitizePhone(to);
+  return {
+    success: true,
+    manual: true,
+    to: phone,
+    telUrl: `tel:${phone}`,
   };
 }
 
@@ -105,7 +109,7 @@ app.get("/api", (req, res) => {
   res.json({
     success: true,
     message: "BloodLink API is working",
-    endpoints: ["/api/donors", "/api/stats", "/api/verify/send", "/api/sms/contact-donor"],
+    endpoints: ["/api/donors", "/api/stats", "/api/sms/contact-donor", "/api/sms/alert-all"],
   });
 });
 
@@ -230,58 +234,42 @@ app.delete("/api/donors/:id", async (req, res, next) => {
 
 app.post("/api/verify/send", async (req, res) => {
   const { phone } = req.body;
+  const sanitizedPhone = sanitizePhone(phone);
 
-  if (!phone) {
+  if (!sanitizedPhone) {
     return res.status(400).json({ success: false, message: "Phone number is required." });
   }
 
-  if (!verifyConfigured) {
-    return res.json({
-      success: true,
-      demo: true,
-      message: "OTP skipped because Twilio Verify is not configured.",
-    });
-  }
-
-  try {
-    await twilioClient.verify.v2
-      .services(process.env.TWILIO_VERIFY_SERVICE_SID)
-      .verifications.create({ to: phone, channel: "sms" });
-
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+  res.json({
+    success: true,
+    manual: true,
+    phone: sanitizedPhone,
+    message: "Manual mode: phone verification is skipped.",
+  });
 });
 
 app.post("/api/verify/check", async (req, res) => {
-  const { phone, code } = req.body;
+  const { phone } = req.body;
+  const sanitizedPhone = sanitizePhone(phone);
 
-  if (!phone || !code) {
-    return res.status(400).json({ success: false, message: "Phone and OTP code are required." });
+  if (!sanitizedPhone) {
+    return res.status(400).json({ success: false, message: "Phone number is required." });
   }
 
-  if (!verifyConfigured) {
-    return res.json({
-      success: true,
-      demo: true,
-      message: "OTP accepted because Twilio Verify is not configured.",
-    });
-  }
-
-  try {
-    const check = await twilioClient.verify.v2
-      .services(process.env.TWILIO_VERIFY_SERVICE_SID)
-      .verificationChecks.create({ to: phone, code });
-
-    res.json({ success: check.status === "approved", status: check.status });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+  res.json({
+    success: true,
+    manual: true,
+    phone: sanitizedPhone,
+    message: "Manual mode: phone number accepted without OTP.",
+  });
 });
 
 app.post("/api/sms/contact-donor", async (req, res, next) => {
   try {
+    if (!req.body || !req.body.donorId) {
+      return res.status(400).json({ success: false, message: "Donor ID is required." });
+    }
+
     const donors = await readDonors();
     const donor = donors.find((item) => item.id === req.body.donorId);
 
@@ -291,17 +279,8 @@ app.post("/api/sms/contact-donor", async (req, res, next) => {
 
     const body = emergencyMessage(req.body);
 
-    if (!twilioConfigured) {
-      return res.json(manualSmsResponse(donor.phone, body));
-    }
-
-    const message = await twilioClient.messages.create({
-      body,
-      from: process.env.TWILIO_PHONE_NUMBER,
-      to: donor.phone,
-    });
-
-    res.json({ success: true, sid: message.sid });
+    // Manual SMS mode: provide link for user to send manually
+    return res.json(manualSmsResponse(donor.phone, body));
   } catch (error) {
     next(error);
   }
@@ -309,6 +288,10 @@ app.post("/api/sms/contact-donor", async (req, res, next) => {
 
 app.post("/api/sms/alert-all", async (req, res, next) => {
   try {
+    if (!req.body || !req.body.requesterPhone) {
+      return res.status(400).json({ success: false, message: "Your phone number is required for broadcast." });
+    }
+
     const donors = await readDonors();
     const targets = donors
       .map(normalizeDonor)
@@ -323,31 +306,14 @@ app.post("/api/sms/alert-all", async (req, res, next) => {
 
     const body = emergencyMessage(req.body);
 
-    if (!twilioConfigured) {
-      return res.json({
-        success: true,
-        manual: true,
-        sent: 0,
-        eligible: targets.length,
-        message: "Twilio is not configured. No live SMS was sent.",
-      });
-    }
-
-    const results = await Promise.allSettled(
-      targets.map((donor) =>
-        twilioClient.messages.create({
-          body,
-          from: process.env.TWILIO_PHONE_NUMBER,
-          to: donor.phone,
-        })
-      )
-    );
-
-    res.json({
+    return res.json({
       success: true,
-      sent: results.filter((result) => result.status === "fulfilled").length,
-      failed: results.filter((result) => result.status === "rejected").length,
+      manual: true,
+      sent: 0,
       eligible: targets.length,
+      body,
+      targets: targets.map((donor) => manualSmsResponse(donor.phone, body)),
+      message: "Manual mode: open each SMS link and press send on your phone.",
     });
   } catch (error) {
     next(error);
@@ -356,6 +322,10 @@ app.post("/api/sms/alert-all", async (req, res, next) => {
 
 app.post("/api/call/donor", async (req, res, next) => {
   try {
+    if (!req.body || !req.body.donorId) {
+      return res.status(400).json({ success: false, message: "Donor ID is required." });
+    }
+
     const donors = await readDonors();
     const donor = donors.find((item) => item.id === req.body.donorId);
 
@@ -363,20 +333,7 @@ app.post("/api/call/donor", async (req, res, next) => {
       return res.status(404).json({ success: false, message: "Donor not found." });
     }
 
-    if (!twilioConfigured) {
-      return res.json({
-        success: false,
-        message: "Twilio Voice is not configured on this server.",
-      });
-    }
-
-    const call = await twilioClient.calls.create({
-      from: process.env.TWILIO_PHONE_NUMBER,
-      to: donor.phone,
-      twiml: `<Response><Say voice="alice">BloodLink emergency alert. Blood is needed at ${req.body.hospital || "the hospital"}. Please contact the requester as soon as possible.</Say></Response>`,
-    });
-
-    res.json({ success: true, callSid: call.sid });
+    res.json(manualCallResponse(donor.phone));
   } catch (error) {
     next(error);
   }
@@ -397,31 +354,13 @@ app.post("/api/call/emergency-broadcast", async (req, res, next) => {
       )
       .slice(0, 5);
 
-    if (!twilioConfigured) {
-      return res.json({
-        success: false,
-        called: 0,
-        eligible: targets.length,
-        message: "Twilio Voice is not configured on this server.",
-      });
-    }
-
-    const twiml = `<Response><Say voice="alice">BloodLink emergency alert. Blood is needed at ${req.body.hospital || "the hospital"}. Please contact ${req.body.requesterName || "the requester"} immediately.</Say></Response>`;
-    const results = await Promise.allSettled(
-      targets.map((donor) =>
-        twilioClient.calls.create({
-          from: process.env.TWILIO_PHONE_NUMBER,
-          to: donor.phone,
-          twiml,
-        })
-      )
-    );
-
     res.json({
       success: true,
-      called: results.filter((result) => result.status === "fulfilled").length,
-      failed: results.filter((result) => result.status === "rejected").length,
+      manual: true,
+      called: 0,
       eligible: targets.length,
+      targets: targets.map((donor) => manualCallResponse(donor.phone)),
+      message: "Manual mode: use the phone links to call donors yourself.",
     });
   } catch (error) {
     next(error);

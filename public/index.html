@@ -166,7 +166,7 @@
 <!-- HERO -->
 <div class="hero">
   <h1>Find a Blood Donor<br/>in Minutes</h1>
-  <p>Real-time alerts via SMS & phone calls. Every second saves a life.</p>
+  <p>Prepare donor messages fast, then send them manually from your phone.</p>
   <div class="hero-stats">
     <div class="stat"><div class="stat-num" id="totalDonors">—</div><div class="stat-lbl">Donors</div></div>
     <div class="stat"><div class="stat-num" id="availDonors">—</div><div class="stat-lbl">Available</div></div>
@@ -220,7 +220,7 @@
       <div class="alert-card">
         <h3>🚨 Emergency Broadcast</h3>
         <p style="font-size:.85rem;color:var(--ink-soft);margin-bottom:.9rem">
-          Send SMS + robocall to ALL eligible donors matching your criteria instantly.
+          Prepare SMS messages for all eligible donors matching your criteria.
         </p>
         <div class="form-group">
           <label>Your Name</label>
@@ -235,8 +235,9 @@
           <input type="text" id="bcastHospital" placeholder="Hospital name & location" />
         </div>
         <button class="btn btn-primary btn-block" onclick="broadcastAlert()">
-          📣 Broadcast Emergency Alert
+          📣 Prepare Broadcast SMS
         </button>
+        <div id="broadcastStatus" style="margin-top:.8rem;font-size:.85rem;color:var(--ink-soft)"></div>
       </div>
 
       <!-- REGISTER -->
@@ -270,13 +271,13 @@
             <label>Phone Number</label>
             <div class="otp-row">
               <input type="tel" id="regPhone" placeholder="+91XXXXXXXXXX" />
-              <button class="btn btn-secondary btn-sm" onclick="sendOTP()">Verify</button>
+              <button class="btn btn-secondary btn-sm" onclick="sendOTP()">Use</button>
             </div>
           </div>
           <div class="form-group" id="otpBox" style="display:none">
-            <label>Enter OTP</label>
+            <label>Manual Check</label>
             <div class="otp-row">
-              <input type="text" id="regOTP" placeholder="6-digit code" maxlength="6" />
+              <input type="text" id="regOTP" placeholder="No OTP needed" disabled />
               <button class="btn btn-call btn-sm" onclick="checkOTP()">✓ Confirm</button>
             </div>
           </div>
@@ -309,7 +310,7 @@
             <div class="tab" onclick="switchTab('available', this)">Available Now</div>
             <div class="tab" onclick="switchTab('emergency', this)">Can Donate</div>
           </div>
-          <div class="urgency-banner">🚨 <span>Emergency alerts active — SMS & calls enabled via Twilio</span></div>
+          <div class="urgency-banner">🚨 <span>Manual SMS mode active — you choose when to send each message</span></div>
           <div class="loader-bar" id="loaderBar"></div>
           <div id="donorList" class="donor-list"></div>
         </div>
@@ -328,7 +329,7 @@
 
     <!-- Requester info for sending alerts -->
     <div class="modal-section">
-      <h4>Your Details (for SMS/Call)</h4>
+      <h4>Your Details (for Manual SMS)</h4>
       <div class="form-group" style="margin-bottom:.7rem">
         <label>Your Name</label>
         <input type="text" id="reqName" placeholder="Patient or Doctor name" />
@@ -348,8 +349,8 @@
     </div>
 
     <div class="modal-actions">
-      <button class="btn btn-sms" id="smsBtn" onclick="sendSMSToDonor()">📩 Send SMS Alert</button>
-      <button class="btn btn-call" id="callBtn" onclick="callDonor()">📞 Call Donor</button>
+      <button class="btn btn-sms" id="smsBtn" onclick="sendSMSToDonor()">📩 Prepare SMS</button>
+      <button class="btn btn-call" id="callBtn" onclick="callDonor()">📞 Open Dialer</button>
       <button class="btn btn-secondary btn-sm" onclick="closeModal()">Close</button>
     </div>
     <div id="actionStatus" style="margin-top:.8rem;font-size:.85rem;color:var(--ink-soft)"></div>
@@ -360,7 +361,7 @@
 <div class="toast" id="toast">✅ <span id="toastMsg"></span></div>
 
 <footer>
-  BloodLink — Emergency Donor Finder &nbsp;|&nbsp; Powered by <span>Twilio SMS & Voice</span> &nbsp;|&nbsp; 2025
+  BloodLink — Emergency Donor Finder &nbsp;|&nbsp; Manual SMS mode &nbsp;|&nbsp; 2025
 </footer>
 
 <script>
@@ -565,27 +566,26 @@ async function sendOTP() {
     const d = await apiFetch('/verify/send', { method:'POST', body: JSON.stringify({ phone }) });
     if (d.success) {
       document.getElementById('otpBox').style.display = 'block';
-      showToast('OTP sent to ' + phone);
+      showToast('Manual mode: confirm the phone number to continue.');
     } else {
       showToast('⚠️ ' + d.message, true);
     }
   } catch {
-    showToast('⚠️ OTP service unavailable', true);
+    showToast('⚠️ Verification service unavailable', true);
   }
 }
 
 async function checkOTP() {
   const phone = document.getElementById('regPhone').value.trim();
-  const code  = document.getElementById('regOTP').value.trim();
   try {
-    const d = await apiFetch('/verify/check', { method:'POST', body: JSON.stringify({ phone, code }) });
+    const d = await apiFetch('/verify/check', { method:'POST', body: JSON.stringify({ phone }) });
     if (d.success) {
       phoneVerified = true;
       document.getElementById('otpBox').style.display = 'none';
-      showToast('✅ Phone number verified!');
+      showToast('Phone number confirmed for manual SMS.');
       document.getElementById('regPhone').style.borderColor = '#2E7D32';
     } else {
-      showToast('❌ Invalid OTP. Try again.', true);
+      showToast('Could not confirm phone number. Try again.', true);
     }
   } catch {
     showToast('⚠️ Verification service unavailable', true);
@@ -619,7 +619,7 @@ async function registerDonor() {
     });
 
     if (data.success) {
-      showToast('🩸 Registered! Welcome SMS sent to your phone.');
+      showToast('Donor registered.');
       ['regName','regAge','regPhone','regCity','regState','regLastDon'].forEach(id => {
         document.getElementById(id).value = '';
       });
@@ -714,6 +714,11 @@ function closeModal() {
 ═══════════════════════════════════════════════ */
 async function sendSMSToDonor() {
   const btn = document.getElementById('smsBtn');
+  if (!currentDonorId) {
+    showToast('No donor selected. Open a donor card first.', true);
+    return;
+  }
+
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Preparing...';
   document.getElementById('actionStatus').textContent = '';
@@ -735,17 +740,16 @@ async function sendSMSToDonor() {
           `<div style="color:var(--success);margin-bottom:.45rem">Manual SMS ready for ${escapeHTML(data.to)}.</div>
            <textarea readonly style="width:100%;min-height:150px;border:1px solid rgba(0,0,0,.12);border-radius:8px;padding:.7rem;font-family:inherit;resize:vertical">${escapeHTML(data.body)}</textarea>
            <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.6rem">
-             <a class="btn btn-sms btn-sm" href="${data.smsUrl}">Open SMS App</a>
+             <a class="btn btn-sms btn-sm" href="${data.smsUrl}" target="_blank">Open SMS App</a>
              <button class="btn btn-secondary btn-sm" onclick="copyManualSMS()">Copy Message</button>
            </div>`;
-        window.location.href = data.smsUrl;
-        showToast('Manual SMS prepared. Send it from your SMS app.');
+        showToast('Manual SMS prepared. Open your SMS app and press send.');
         return;
       }
 
       document.getElementById('actionStatus').innerHTML =
-        `<span style="color:var(--success)">✅ SMS delivered to donor! SID: ${data.sid}</span>`;
-      showToast('SMS sent to donor successfully!');
+        `<span style="color:var(--success)">SMS prepared.</span>`;
+      showToast('SMS prepared.');
     } else {
       document.getElementById('actionStatus').innerHTML =
         `<span style="color:var(--red)">❌ ${data.message}</span>`;
@@ -755,7 +759,7 @@ async function sendSMSToDonor() {
     showToast('⚠️ Server unreachable', true);
   } finally {
     btn.disabled = false;
-    btn.innerHTML = '📩 Send SMS Alert';
+    btn.innerHTML = '📩 Prepare SMS';
   }
 }
 
@@ -777,8 +781,13 @@ async function copyManualSMS() {
 
 async function callDonor() {
   const btn = document.getElementById('callBtn');
+  if (!currentDonorId) {
+    showToast('No donor selected. Open a donor card first.', true);
+    return;
+  }
+
   btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> Calling...';
+  btn.innerHTML = '<span class="spinner"></span> Preparing...';
 
   const payload = {
     donorId: currentDonorId,
@@ -791,8 +800,9 @@ async function callDonor() {
     const data = await apiFetch('/call/donor', { method:'POST', body: JSON.stringify(payload) });
     if (data.success) {
       document.getElementById('actionStatus').innerHTML =
-        `<span style="color:var(--success)">📞 Call initiated! SID: ${data.callSid}</span>`;
-      showToast('Calling donor now via Twilio Voice!');
+        `<div style="color:var(--success);margin-bottom:.45rem">Manual call ready for ${escapeHTML(data.to)}.</div>
+         <a class="btn btn-call btn-sm" href="${data.telUrl}">Open Dialer</a>`;
+      showToast('Manual call prepared. Open your dialer to place it.');
     } else {
       document.getElementById('actionStatus').innerHTML =
         `<span style="color:var(--red)">❌ ${data.message}</span>`;
@@ -802,7 +812,7 @@ async function callDonor() {
     showToast('⚠️ Server unreachable', true);
   } finally {
     btn.disabled = false;
-    btn.innerHTML = '📞 Call Donor';
+    btn.innerHTML = '📞 Open Dialer';
   }
 }
 
@@ -814,10 +824,11 @@ async function broadcastAlert() {
   const phone    = document.getElementById('bcastPhone').value.trim();
   const hospital = document.getElementById('bcastHospital').value.trim();
   const city     = document.getElementById('searchCity').value.trim();
+  const status   = document.getElementById('broadcastStatus');
 
   if (!phone) { showToast('Enter your phone number for broadcast', true); return; }
 
-  if (!confirm(`This will send LIVE SMS + calls to ALL matching donors. Continue?`)) return;
+  if (!confirm('This will prepare manual SMS links for matching donors. You will still press send yourself. Continue?')) return;
 
   const payload = {
     bloodType: currentBloodSearch,
@@ -828,16 +839,26 @@ async function broadcastAlert() {
   };
 
   try {
-    // Send SMS broadcast
+    status.innerHTML = '<span class="spinner"></span> Preparing messages...';
     const smsData = await apiFetch('/sms/alert-all', { method:'POST', body: JSON.stringify(payload) });
-    // Send voice broadcast
-    const callData = await apiFetch('/call/emergency-broadcast', { method:'POST', body: JSON.stringify(payload) });
 
-    const msg = `📣 Broadcast done! SMS: ${smsData.sent || 0} sent, Calls: ${callData.called || 0} made.`;
-    showToast(msg);
-    alert(msg);
+    const targets = smsData.targets || [];
+    if (!targets.length) {
+      status.innerHTML = '<span style="color:var(--warning)">No eligible donors matched this broadcast.</span>';
+      showToast('No eligible donors matched this broadcast.', true);
+      return;
+    }
+
+    status.innerHTML = `
+      <div style="color:var(--success);margin-bottom:.45rem">${targets.length} manual SMS message${targets.length !== 1 ? 's' : ''} ready.</div>
+      <textarea readonly style="width:100%;min-height:120px;border:1px solid rgba(0,0,0,.12);border-radius:8px;padding:.7rem;font-family:inherit;resize:vertical">${escapeHTML(smsData.body || '')}</textarea>
+      <div style="display:flex;gap:.45rem;flex-wrap:wrap;margin-top:.6rem">
+        ${targets.map((target, index) => `<a class="btn btn-sms btn-sm" href="${target.smsUrl}" target="_blank">SMS ${index + 1}: ${escapeHTML(target.to)}</a>`).join('')}
+      </div>`;
+    showToast('Broadcast SMS links are ready. Open each one and press send.');
   } catch {
-    showToast('⚠️ Broadcast failed — is server running?', true);
+    status.textContent = '';
+    showToast('⚠️ Broadcast failed - is server running?', true);
   }
 }
 
