@@ -4,6 +4,7 @@ const express = require("express");
 const path = require("path");
 const fs = require("fs/promises");
 const cors = require("cors");
+const twilio = require("twilio");
 const { v4: uuidv4 } = require("uuid");
 
 const app = express();
@@ -12,6 +13,12 @@ const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, "public");
 const DATA_DIR = path.join(__dirname, "data");
 const DONORS_FILE = path.join(DATA_DIR, "donors.json");
+
+const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
+const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+const TWILIO_PHONE_NUMBER = process.env.TWILIO_PHONE_NUMBER;
+const twilioConfigured = Boolean(TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN && TWILIO_PHONE_NUMBER);
+const twilioClient = twilioConfigured ? twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN) : null;
 
 app.use(cors());
 app.use(express.json());
@@ -279,8 +286,24 @@ app.post("/api/sms/contact-donor", async (req, res, next) => {
 
     const body = emergencyMessage(req.body);
 
-    // Manual SMS mode: provide link for user to send manually
-    return res.json(manualSmsResponse(donor.phone, body));
+    if (!twilioConfigured) {
+      return res.json(manualSmsResponse(donor.phone, body));
+    }
+
+    const message = await twilioClient.messages.create({
+      from: TWILIO_PHONE_NUMBER,
+      to: donor.phone,
+      body,
+    });
+
+    return res.json({
+      success: true,
+      manual: false,
+      to: donor.phone,
+      body,
+      sid: message.sid,
+      message: "SMS sent successfully.",
+    });
   } catch (error) {
     next(error);
   }
@@ -306,14 +329,40 @@ app.post("/api/sms/alert-all", async (req, res, next) => {
 
     const body = emergencyMessage(req.body);
 
+    if (!twilioConfigured) {
+      return res.json({
+        success: true,
+        manual: true,
+        sent: 0,
+        eligible: targets.length,
+        body,
+        targets: targets.map((donor) => manualSmsResponse(donor.phone, body)),
+        message: "Manual mode: open each SMS link and press send on your phone.",
+      });
+    }
+
+    const results = await Promise.allSettled(
+      targets.map((donor) =>
+        twilioClient.messages.create({
+          from: TWILIO_PHONE_NUMBER,
+          to: donor.phone,
+          body,
+        })
+      )
+    );
+
+    const sent = results.filter((r) => r.status === "fulfilled").length;
+    const failed = results.filter((r) => r.status === "rejected").length;
+
     return res.json({
       success: true,
-      manual: true,
-      sent: 0,
+      manual: false,
+      sent,
+      failed,
       eligible: targets.length,
       body,
-      targets: targets.map((donor) => manualSmsResponse(donor.phone, body)),
-      message: "Manual mode: open each SMS link and press send on your phone.",
+      targets: targets.map((donor) => ({ to: donor.phone })),
+      message: "SMS broadcast completed.",
     });
   } catch (error) {
     next(error);

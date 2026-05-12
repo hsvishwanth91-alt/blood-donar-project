@@ -754,8 +754,9 @@ async function sendSMSToDonor() {
       }
 
       document.getElementById('actionStatus').innerHTML =
-        `<span style="color:var(--success)">SMS prepared.</span>`;
-      showToast('SMS prepared.');
+        `<div style="color:var(--success);margin-bottom:.45rem">SMS sent to ${escapeHTML(data.to)}.</div>
+         <div>Message SID: ${escapeHTML(data.sid || 'N/A')}</div>`;
+      showToast('SMS sent successfully.');
     } else {
       document.getElementById('actionStatus').innerHTML =
         `<span style="color:var(--red)">❌ ${data.message}</span>`;
@@ -855,13 +856,21 @@ async function broadcastAlert() {
       return;
     }
 
-    status.innerHTML = `
+    if (smsData.manual) {
+      status.innerHTML = `
       <div style="color:var(--success);margin-bottom:.45rem">${targets.length} manual SMS message${targets.length !== 1 ? 's' : ''} ready.</div>
       <textarea readonly style="width:100%;min-height:120px;border:1px solid rgba(0,0,0,.12);border-radius:8px;padding:.7rem;font-family:inherit;resize:vertical">${escapeHTML(smsData.body || '')}</textarea>
       <div style="display:flex;gap:.45rem;flex-wrap:wrap;margin-top:.6rem">
         ${targets.map((target, index) => `<a class="btn btn-sms btn-sm" href="${target.smsUrl}" target="_blank">SMS ${index + 1}: ${escapeHTML(target.to)}</a>`).join('')}
       </div>`;
-    showToast('Broadcast SMS links are ready. Open each one and press send.');
+      showToast('Broadcast SMS links are ready. Open each one and press send.');
+      return;
+    }
+
+    status.innerHTML = `
+      <div style="color:var(--success);margin-bottom:.45rem">SMS broadcast complete.</div>
+      <div>${smsData.sent || 0} sent, ${smsData.failed || 0} failed, ${smsData.eligible || 0} eligible.</div>`;
+    showToast('SMS broadcast completed successfully.');
   } catch {
     status.textContent = '';
     showToast('⚠️ Broadcast failed - is server running?', true);
