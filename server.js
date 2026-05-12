@@ -10,7 +10,9 @@ const { v4: uuidv4 } = require("uuid");
 const app = express();
 
 const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || "0.0.0.0";
 const PUBLIC_DIR = path.join(__dirname, "public");
+const INDEX_FILE = path.join(PUBLIC_DIR, "index.html");
 const DATA_DIR = path.join(__dirname, "data");
 const DONORS_FILE = path.join(DATA_DIR, "donors.json");
 
@@ -20,9 +22,22 @@ const TWILIO_PHONE_NUMBER = process.env.TWILIO_PHONE_NUMBER;
 const twilioConfigured = Boolean(TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN && TWILIO_PHONE_NUMBER);
 const twilioClient = twilioConfigured ? twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN) : null;
 
+app.disable("x-powered-by");
+app.set("trust proxy", 1);
+
 app.use(cors());
 app.use(express.json());
-app.use(express.static(PUBLIC_DIR));
+app.use(express.static(PUBLIC_DIR, {
+  extensions: ["html"],
+  index: false,
+  maxAge: process.env.NODE_ENV === "production" ? "1h" : 0,
+}));
+
+function sendIndex(req, res, next) {
+  res.sendFile(INDEX_FILE, (error) => {
+    if (error) next(error);
+  });
+}
 
 async function ensureDataFile() {
   await fs.mkdir(DATA_DIR, { recursive: true });
@@ -109,14 +124,24 @@ function manualCallResponse(to) {
 }
 
 app.get("/", (req, res) => {
-  res.sendFile(path.join(PUBLIC_DIR, "index.html"));
+  sendIndex(req, res, () => {
+    res.status(500).send("Unable to load application.");
+  });
 });
 
 app.get("/api", (req, res) => {
   res.json({
     success: true,
     message: "BloodLink API is working",
-    endpoints: ["/api/donors", "/api/stats", "/api/sms/contact-donor", "/api/sms/alert-all"],
+    endpoints: ["/api/health", "/api/donors", "/api/stats", "/api/sms/contact-donor", "/api/sms/alert-all"],
+  });
+});
+
+app.get("/api/health", (req, res) => {
+  res.json({
+    success: true,
+    status: "ok",
+    uptime: process.uptime(),
   });
 });
 
@@ -416,8 +441,20 @@ app.post("/api/call/emergency-broadcast", async (req, res, next) => {
   }
 });
 
-app.get("*", (req, res) => {
-  res.sendFile(path.join(PUBLIC_DIR, "index.html"));
+app.use("/api", (req, res) => {
+  res.status(404).json({
+    success: false,
+    message: "API route not found.",
+  });
+});
+
+app.get(/^\/(?!api(?:\/|$)).*/, sendIndex);
+
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: "Route not found.",
+  });
 });
 
 app.use((error, req, res, next) => {
@@ -429,6 +466,6 @@ app.use((error, req, res, next) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`BloodLink server running on port ${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`BloodLink server running on http://${HOST}:${PORT}`);
 });

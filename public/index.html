@@ -374,7 +374,7 @@
 /* ═══════════════════════════════════════════════
    CONFIG — points to your Express backend
 ═══════════════════════════════════════════════ */
-const API = '/api';
+const API = (window.BLOODLINK_API_URL || '/api').replace(/\/$/, '');
 
 /* ═══════════════════════════════════════════════
    STATE
@@ -434,12 +434,14 @@ function escapeHTML(value) {
 }
 
 async function apiFetch(path, opts = {}) {
-  const response = await fetch(API + path, {
+  const response = await fetch(`${API}${path}`, {
     ...opts,
     headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) }
   });
 
-  const body = await response.json().catch(() => ({}));
+  const body = await response.json().catch(() => ({
+    message: 'Server returned a non-JSON response. Check that this is deployed as a Render Web Service, not a Static Site.'
+  }));
   if (!response.ok) {
     throw new Error(body.message || response.statusText || 'API request failed');
   }
@@ -545,7 +547,7 @@ async function loadDonors(filter) {
     document.getElementById('donorList').innerHTML = `<div class="empty-state">
       <div class="empty-icon">⚠️</div>
       <h3>Server not reachable</h3>
-      <p>Run <code>node server.js</code> in your terminal.</p>
+      <p>Please wait a moment and refresh. The Render service may still be starting.</p>
     </div>`;
   } finally {
     setLoader(false);
