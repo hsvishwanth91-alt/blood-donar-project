@@ -1,135 +1,60 @@
+# BloodLink - Emergency Blood Donor Finder
 
-# blood-donar-project
-=======
-# 🩸 BloodLink — Emergency Blood Donor Finder
+Full-stack emergency donor finder with manual SMS support. The app prepares donor messages and opens your device SMS app, so you stay in control and press send yourself.
 
-Full-stack emergency donor finder with **real SMS alerts** and **voice calls** powered by Twilio.
+## Project Structure
 
----
-
-## 📁 Project Structure
-
-```
-bloodlink/
-├── server.js           ← Express backend (API + Twilio)
-├── package.json        ← Dependencies
-├── .env.example        ← Copy to .env and fill keys
-├── .env                ← Your actual credentials (DO NOT commit)
-├── data/
-│   └── donors.json     ← Persistent donor database (JSON)
-└── public/
-    └── index.html      ← Frontend UI (served by Express)
+```text
+bloodlink_project/
+server.js
+package.json
+data/donors.json
+public/index.html
 ```
 
----
+## Quick Start
 
-## 🚀 Quick Start
-
-### 1. Install dependencies
 ```bash
-cd bloodlink
 npm install
+npm start
 ```
 
-### 2. Set up Twilio
-1. Sign up free at **https://www.twilio.com/try-twilio**
-2. Go to **Console → Account Info**
-3. Copy your **Account SID** and **Auth Token**
-4. Go to **Phone Numbers → Manage → Buy a Number**
-   - Enable both **SMS** and **Voice** capabilities
-5. *(Optional)* For OTP verification: **Verify → Create Service** → copy the Service SID
+Open `http://localhost:3000` in your browser.
 
-### 3. Configure environment variables
-```bash
-cp .env.example .env
-```
+No Twilio account, API key, or automated SMS service is required.
 
-Edit `.env`:
-```env
-PORT=3000
-TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-TWILIO_AUTH_TOKEN=your_auth_token_here
-TWILIO_PHONE_NUMBER=+1XXXXXXXXXX
-TWILIO_VERIFY_SERVICE_SID=VAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-```
+If you configure Twilio credentials in `.env`, the app can send SMS automatically. Otherwise it stays in manual SMS mode and prepares `sms:` links for your phone.
 
-### 4. Run the server
-```bash
-node server.js
-# or with auto-reload:
-npm run dev
-```
+## How SMS Works
 
-### 5. Open the app
-Visit **http://localhost:3000** in your browser.
+1. Search for matching donors.
+2. Click `Alert` on a donor.
+3. Fill requester details.
+4. Click `Prepare SMS`.
+5. Use `Open SMS App` or copy the message, then press send manually.
 
----
+Emergency broadcast works the same way: it prepares one SMS link per eligible donor instead of sending anything automatically.
 
-## 📡 API Endpoints
+## API Endpoints
 
-### Donors
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/donors` | List donors (supports `?blood=A+&city=Mumbai&available=available`) |
-| POST | `/api/donors` | Register a new donor |
-| PATCH | `/api/donors/:id/availability` | Toggle availability |
+| GET | `/api/donors` | List donors |
+| GET | `/api/donors/:id` | Get one donor |
+| POST | `/api/donors` | Register a donor |
+| PATCH | `/api/donors/:id/availability` | Update donor availability |
 | DELETE | `/api/donors/:id` | Remove a donor |
-| GET | `/api/stats` | Get total, available, cities count |
+| GET | `/api/stats` | Get total, available, and city counts |
+| POST | `/api/sms/contact-donor` | Prepare a manual SMS for one donor |
+| POST | `/api/sms/alert-all` | Prepare manual SMS links for matching donors |
+| POST | `/api/call/donor` | Prepare a manual phone dialer link |
 
-### SMS (Twilio)
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/sms/contact-donor` | Send emergency SMS to one donor |
-| POST | `/api/sms/alert-all` | Broadcast SMS to all eligible donors |
-| POST | `/api/sms/confirmation` | Send confirmation to requester |
-
-### Voice Calls (Twilio)
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/call/donor` | Auto-call one donor with TwiML message |
-| POST | `/api/call/emergency-broadcast` | Robocall up to 5 matching donors |
-
-### OTP Verification
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/verify/send` | Send OTP to phone number |
-| POST | `/api/verify/check` | Verify OTP code |
-
----
-
-## 🛠 Features
-
-- **🩸 Donor Registry** — Search by blood type, city, availability
-- **📩 SMS Alerts** — Real Twilio SMS sent to donors in emergency
-- **📞 Voice Calls** — Automated robocall with alice voice (en-IN)
-- **📣 Broadcast** — Alert all eligible donors at once
-- **🔐 OTP Verify** — Phone verification before registration
-- **💾 Persistent Storage** — JSON file-based donor database
-- **📱 Responsive UI** — Works on mobile and desktop
-
----
-
-## ⚠️ Twilio Trial Account Notes
-
-With a **free trial account**:
-- You can only send SMS/calls to **verified numbers** (add them in Twilio Console → Verified Caller IDs)
-- Upgrade to a paid account for unrestricted messaging
-- Trial credits are sufficient for testing all features
-
----
-
-## 🔧 Tech Stack
+## Tech Stack
 
 | Layer | Technology |
-|-------|-----------|
+|-------|------------|
 | Backend | Node.js + Express |
-| SMS & Calls | Twilio Programmable SMS + Voice |
-| OTP | Twilio Verify |
 | Frontend | Vanilla HTML/CSS/JS |
-| Database | JSON file (easily swappable to MongoDB/PostgreSQL) |
+| Database | JSON file |
+| SMS | Manual `sms:` links |
 
----
-
-## 📝 License
-MIT — Built for life-saving missions.
->>>>>>> ebe3138565c3046a032ebeafc0292dfbcffec00a
