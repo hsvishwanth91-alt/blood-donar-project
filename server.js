@@ -291,6 +291,11 @@ app.post("/api/sms/contact-donor", async (req, res, next) => {
 
     const body = emergencyMessage(req.body);
 
+    // Always use manual SMS for testing/demo purposes
+    return res.json(manualSmsResponse(donor.phone, body));
+
+    // Uncomment below to enable Twilio SMS sending
+    /*
     if (!twilioConfigured) {
       return res.json(manualSmsResponse(donor.phone, body));
     }
@@ -302,6 +307,7 @@ app.post("/api/sms/contact-donor", async (req, res, next) => {
     });
 
     res.json({ success: true, sid: message.sid });
+    */
   } catch (error) {
     next(error);
   }
@@ -323,6 +329,17 @@ app.post("/api/sms/alert-all", async (req, res, next) => {
 
     const body = emergencyMessage(req.body);
 
+    // Always use manual SMS for testing/demo purposes
+    return res.json({
+      success: true,
+      manual: true,
+      sent: 0,
+      eligible: targets.length,
+      message: "Manual mode: No live SMS sent. Use the app to open SMS composer for each donor.",
+    });
+
+    // Uncomment below to enable Twilio SMS sending
+    /*
     if (!twilioConfigured) {
       return res.json({
         success: true,
@@ -349,6 +366,7 @@ app.post("/api/sms/alert-all", async (req, res, next) => {
       failed: results.filter((result) => result.status === "rejected").length,
       eligible: targets.length,
     });
+    */
   } catch (error) {
     next(error);
   }
