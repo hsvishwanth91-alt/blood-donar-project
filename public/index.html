@@ -166,7 +166,7 @@
 <!-- HERO -->
 <div class="hero">
   <h1>Find a Blood Donor<br/>in Minutes</h1>
-  <p>Prepare donor messages fast, then send them manually from your phone.</p>
+  <p>Find matching donors fast and send emergency SMS alerts from the app.</p>
   <div class="hero-stats">
     <div class="stat"><div class="stat-num" id="totalDonors">—</div><div class="stat-lbl">Donors</div></div>
     <div class="stat"><div class="stat-num" id="availDonors">—</div><div class="stat-lbl">Available</div></div>
@@ -220,7 +220,7 @@
       <div class="alert-card">
         <h3>🚨 Emergency Broadcast</h3>
         <p style="font-size:.85rem;color:var(--ink-soft);margin-bottom:.9rem">
-          Prepare SMS messages for all eligible donors matching your criteria.
+          Send SMS messages to all eligible donors matching your criteria.
         </p>
         <div class="form-group">
           <label>Your Name</label>
@@ -235,10 +235,10 @@
           <input type="text" id="bcastHospital" placeholder="Hospital name & location" />
         </div>
         <button class="btn btn-primary btn-block" onclick="broadcastAlert()">
-          📣 Prepare Broadcast SMS
+          📣 Send Broadcast SMS
         </button>
         <p style="font-size:.82rem;color:var(--ink-soft);margin-top:.6rem;line-height:1.5">
-          This prepares one manual SMS message per matching donor. Open the link on your phone, then tap Send.
+          This sends an emergency SMS to matching donors when SMS is configured.
         </p>
         <div id="broadcastStatus" style="margin-top:.8rem;font-size:.85rem;color:var(--ink-soft)"></div>
       </div>
@@ -278,9 +278,9 @@
             </div>
           </div>
           <div class="form-group" id="otpBox" style="display:none">
-            <label>Manual Check</label>
+            <label>Verification Code</label>
             <div class="otp-row">
-              <input type="text" id="regOTP" placeholder="No OTP needed" disabled />
+              <input type="text" id="regOTP" placeholder="Enter OTP" />
               <button class="btn btn-call btn-sm" onclick="checkOTP()">✓ Confirm</button>
             </div>
           </div>
@@ -313,7 +313,7 @@
             <div class="tab" onclick="switchTab('available', this)">Available Now</div>
             <div class="tab" onclick="switchTab('emergency', this)">Can Donate</div>
           </div>
-          <div class="urgency-banner">🚨 <span>Manual SMS mode active — you choose when to send each message</span></div>
+          <div class="urgency-banner">🚨 <span id="smsModeText">Checking SMS mode...</span></div>
           <div class="loader-bar" id="loaderBar"></div>
           <div id="donorList" class="donor-list"></div>
         </div>
@@ -332,7 +332,7 @@
 
     <!-- Requester info for sending alerts -->
     <div class="modal-section">
-      <h4>Your Details (for Manual SMS)</h4>
+      <h4>Your Details</h4>
       <div class="form-group" style="margin-bottom:.7rem">
         <label>Your Name</label>
         <input type="text" id="reqName" placeholder="Patient or Doctor name" />
@@ -352,7 +352,7 @@
     </div>
 
     <div class="modal-actions">
-      <button class="btn btn-sms" id="smsBtn" onclick="sendSMSToDonor()">📩 Prepare SMS</button>
+      <button class="btn btn-sms" id="smsBtn" onclick="sendSMSToDonor()">📩 Send SMS</button>
       <button class="btn btn-call" id="callBtn" onclick="callDonor()">📞 Open Dialer</button>
       <button class="btn btn-secondary btn-sm" onclick="closeModal()">Close</button>
     </div>
@@ -367,7 +367,7 @@
 <div class="toast" id="toast">✅ <span id="toastMsg"></span></div>
 
 <footer>
-  BloodLink — Emergency Donor Finder &nbsp;|&nbsp; Manual SMS mode &nbsp;|&nbsp; 2025
+  BloodLink — Emergency Donor Finder &nbsp;|&nbsp; SMS alerts &nbsp;|&nbsp; 2025
 </footer>
 
 <script>
@@ -384,6 +384,7 @@ let currentRegBlood    = null;
 let currentDonorId     = null;
 let currentTab         = 'all';
 let phoneVerified      = false;
+let smsAutoMode        = false;
 
 /* ═══════════════════════════════════════════════
    BLOOD GRID INTERACTIONS
@@ -458,6 +459,27 @@ async function loadStats() {
     document.getElementById('availDonors').textContent = d.available;
     document.getElementById('citiesCount').textContent = d.cities;
   } catch { /* server may not be running */ }
+}
+
+async function loadConfig() {
+  try {
+    const config = await apiFetch('/config');
+    smsAutoMode = Boolean(config.smsConfigured);
+  } catch {
+    smsAutoMode = false;
+  }
+
+  const modeText = document.getElementById('smsModeText');
+  if (modeText) {
+    modeText.textContent = smsAutoMode
+      ? 'Live SMS mode active — alerts are sent through Twilio'
+      : 'Manual SMS mode active — Twilio is not configured on this server';
+  }
+
+  const smsBtn = document.getElementById('smsBtn');
+  if (smsBtn) {
+    smsBtn.innerHTML = smsAutoMode ? '📩 Send SMS' : '📩 Prepare SMS';
+  }
 }
 
 /* ═══════════════════════════════════════════════
@@ -573,30 +595,35 @@ async function sendOTP() {
   try {
     const d = await apiFetch('/verify/send', { method:'POST', body: JSON.stringify({ phone }) });
     if (d.success) {
+      const otpInput = document.getElementById('regOTP');
       document.getElementById('otpBox').style.display = 'block';
-      showToast('Manual mode: confirm the phone number to continue.');
+      otpInput.disabled = Boolean(d.manual);
+      otpInput.value = '';
+      otpInput.placeholder = d.manual ? 'No OTP needed' : 'Enter OTP from SMS';
+      showToast(d.manual ? 'Manual mode: confirm the phone number to continue.' : 'Verification SMS sent.');
     } else {
       showToast('⚠️ ' + d.message, true);
     }
-  } catch {
-    showToast('⚠️ Verification service unavailable', true);
+  } catch (error) {
+    showToast('⚠️ ' + (error.message || 'Verification service unavailable'), true);
   }
 }
 
 async function checkOTP() {
   const phone = document.getElementById('regPhone').value.trim();
   try {
-    const d = await apiFetch('/verify/check', { method:'POST', body: JSON.stringify({ phone }) });
+    const otp = document.getElementById('regOTP').value.trim();
+    const d = await apiFetch('/verify/check', { method:'POST', body: JSON.stringify({ phone, otp }) });
     if (d.success) {
       phoneVerified = true;
       document.getElementById('otpBox').style.display = 'none';
-      showToast('Phone number confirmed for manual SMS.');
+      showToast(d.message || 'Phone number confirmed.');
       document.getElementById('regPhone').style.borderColor = '#2E7D32';
     } else {
       showToast('Could not confirm phone number. Try again.', true);
     }
-  } catch {
-    showToast('⚠️ Verification service unavailable', true);
+  } catch (error) {
+    showToast('⚠️ ' + (error.message || 'Verification service unavailable'), true);
   }
 }
 
@@ -764,11 +791,13 @@ async function sendSMSToDonor() {
         `<span style="color:var(--red)">❌ ${data.message}</span>`;
       showToast('SMS failed: ' + data.message, true);
     }
-  } catch {
-    showToast('⚠️ Server unreachable', true);
+  } catch (error) {
+    document.getElementById('actionStatus').innerHTML =
+      `<span style="color:var(--red)">❌ ${escapeHTML(error.message || 'SMS could not be sent.')}</span>`;
+    showToast('⚠️ ' + (error.message || 'SMS could not be sent.'), true);
   } finally {
     btn.disabled = false;
-    btn.innerHTML = '📩 Prepare SMS';
+    btn.innerHTML = smsAutoMode ? '📩 Send SMS' : '📩 Prepare SMS';
   }
 }
 
@@ -837,7 +866,9 @@ async function broadcastAlert() {
 
   if (!phone) { showToast('Enter your phone number for broadcast', true); return; }
 
-  if (!confirm('This will prepare manual SMS links for matching donors. You will still press send yourself. Continue?')) return;
+  if (!confirm(smsAutoMode
+    ? 'This will send SMS alerts to matching donors now. Continue?'
+    : 'This will prepare manual SMS links for matching donors. You will still press send yourself. Continue?')) return;
 
   const payload = {
     bloodType: currentBloodSearch,
@@ -873,9 +904,9 @@ async function broadcastAlert() {
       <div style="color:var(--success);margin-bottom:.45rem">SMS broadcast complete.</div>
       <div>${smsData.sent || 0} sent, ${smsData.failed || 0} failed, ${smsData.eligible || 0} eligible.</div>`;
     showToast('SMS broadcast completed successfully.');
-  } catch {
+  } catch (error) {
     status.textContent = '';
-    showToast('⚠️ Broadcast failed - is server running?', true);
+    showToast('⚠️ ' + (error.message || 'Broadcast failed - is server running?'), true);
   }
 }
 
@@ -889,6 +920,7 @@ document.getElementById('contactModal').addEventListener('click', function(e) {
 /* ═══════════════════════════════════════════════
    INIT
 ═══════════════════════════════════════════════ */
+loadConfig();
 loadStats();
 loadDonors();
 </script>

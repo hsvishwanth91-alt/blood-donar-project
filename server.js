@@ -5,6 +5,7 @@ const path = require("path");
 const fs = require("fs/promises");
 const cors = require("cors");
 const twilio = require("twilio");
+const crypto = require("crypto");
 const { v4: uuidv4 } = require("uuid");
 
 const app = express();
@@ -21,6 +22,7 @@ const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
 const TWILIO_PHONE_NUMBER = process.env.TWILIO_PHONE_NUMBER;
 const twilioConfigured = Boolean(TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN && TWILIO_PHONE_NUMBER);
 const twilioClient = twilioConfigured ? twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN) : null;
+const verificationCodes = new Map();
 
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
@@ -102,8 +104,31 @@ function sanitizePhone(to) {
   return String(to || "").trim().replace(/\s+/g, "");
 }
 
+function normalizePhone(to) {
+  const raw = sanitizePhone(to).replace(/[().-]/g, "");
+  if (!raw) return "";
+
+  if (/^\+[1-9]\d{7,14}$/.test(raw)) return raw;
+  if (/^00[1-9]\d{7,14}$/.test(raw)) return `+${raw.slice(2)}`;
+  if (/^[6-9]\d{9}$/.test(raw)) return `+91${raw}`;
+  if (/^91[6-9]\d{9}$/.test(raw)) return `+${raw}`;
+
+  return "";
+}
+
+function twilioErrorMessage(error) {
+  const code = error && error.code;
+
+  if (code === 21211) return "The recipient phone number is invalid. Use a full number like +919876543210.";
+  if (code === 21608) return "Twilio trial accounts can send SMS only to verified recipient numbers. Verify this number in Twilio or upgrade the account.";
+  if (code === 21610) return "This recipient has opted out of SMS from this Twilio number.";
+  if (code === 21614) return "Twilio says this recipient number cannot receive SMS.";
+
+  return (error && error.message) || "Twilio could not send the SMS.";
+}
+
 function manualSmsResponse(to, body) {
-  const phone = sanitizePhone(to);
+  const phone = normalizePhone(to) || sanitizePhone(to);
   return {
     success: true,
     manual: true,
@@ -114,13 +139,49 @@ function manualSmsResponse(to, body) {
 }
 
 function manualCallResponse(to) {
-  const phone = sanitizePhone(to);
+  const phone = normalizePhone(to) || sanitizePhone(to);
   return {
     success: true,
     manual: true,
     to: phone,
     telUrl: `tel:${phone}`,
   };
+}
+
+async function sendSms(to, body) {
+  const phone = normalizePhone(to);
+
+  if (!phone) {
+    const error = new Error("Enter a valid phone number with country code, for example +919876543210.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (!twilioConfigured) {
+    return manualSmsResponse(phone, body);
+  }
+
+  try {
+    const message = await twilioClient.messages.create({
+      from: TWILIO_PHONE_NUMBER,
+      to: phone,
+      body,
+    });
+
+    return {
+      success: true,
+      manual: false,
+      to: phone,
+      body,
+      sid: message.sid,
+      message: "SMS sent successfully.",
+    };
+  } catch (error) {
+    const wrapped = new Error(twilioErrorMessage(error));
+    wrapped.statusCode = error.status || 502;
+    wrapped.twilioCode = error.code;
+    throw wrapped;
+  }
 }
 
 app.get("/", (req, res) => {
@@ -141,7 +202,15 @@ app.get("/api/health", (req, res) => {
   res.json({
     success: true,
     status: "ok",
+    smsConfigured: twilioConfigured,
     uptime: process.uptime(),
+  });
+});
+
+app.get("/api/config", (req, res) => {
+  res.json({
+    success: true,
+    smsConfigured: twilioConfigured,
   });
 });
 
@@ -264,35 +333,72 @@ app.delete("/api/donors/:id", async (req, res, next) => {
   }
 });
 
-app.post("/api/verify/send", async (req, res) => {
-  const { phone } = req.body;
-  const sanitizedPhone = sanitizePhone(phone);
+app.post("/api/verify/send", async (req, res, next) => {
+  try {
+    const { phone } = req.body;
+    const normalizedPhone = normalizePhone(phone);
 
-  if (!sanitizedPhone) {
-    return res.status(400).json({ success: false, message: "Phone number is required." });
+    if (!normalizedPhone) {
+      return res.status(400).json({ success: false, message: "Enter a valid phone number, for example +919876543210." });
+    }
+
+    if (!twilioConfigured) {
+      return res.json({
+        success: true,
+        manual: true,
+        phone: normalizedPhone,
+        message: "Manual mode: phone verification is skipped.",
+      });
+    }
+
+    const code = crypto.randomInt(100000, 999999).toString();
+    verificationCodes.set(normalizedPhone, {
+      code,
+      expiresAt: Date.now() + 10 * 60 * 1000,
+    });
+
+    const sms = await sendSms(normalizedPhone, `Your BloodLink verification code is ${code}. It expires in 10 minutes.`);
+
+    res.json({
+      success: true,
+      manual: false,
+      phone: normalizedPhone,
+      sid: sms.sid,
+      message: "Verification SMS sent.",
+    });
+  } catch (error) {
+    next(error);
   }
-
-  res.json({
-    success: true,
-    manual: true,
-    phone: sanitizedPhone,
-    message: "Manual mode: phone verification is skipped.",
-  });
 });
 
 app.post("/api/verify/check", async (req, res) => {
-  const { phone } = req.body;
-  const sanitizedPhone = sanitizePhone(phone);
+  const { phone, otp } = req.body;
+  const normalizedPhone = normalizePhone(phone);
 
-  if (!sanitizedPhone) {
-    return res.status(400).json({ success: false, message: "Phone number is required." });
+  if (!normalizedPhone) {
+    return res.status(400).json({ success: false, message: "Enter a valid phone number, for example +919876543210." });
+  }
+
+  if (twilioConfigured) {
+    const saved = verificationCodes.get(normalizedPhone);
+
+    if (!saved || saved.expiresAt < Date.now()) {
+      verificationCodes.delete(normalizedPhone);
+      return res.status(400).json({ success: false, message: "Verification code expired. Send a new code." });
+    }
+
+    if (String(otp || "").trim() !== saved.code) {
+      return res.status(400).json({ success: false, message: "Invalid verification code." });
+    }
+
+    verificationCodes.delete(normalizedPhone);
   }
 
   res.json({
     success: true,
-    manual: true,
-    phone: sanitizedPhone,
-    message: "Manual mode: phone number accepted without OTP.",
+    manual: !twilioConfigured,
+    phone: normalizedPhone,
+    message: twilioConfigured ? "Phone number verified." : "Manual mode: phone number accepted without OTP.",
   });
 });
 
@@ -311,24 +417,8 @@ app.post("/api/sms/contact-donor", async (req, res, next) => {
 
     const body = emergencyMessage(req.body);
 
-    if (!twilioConfigured) {
-      return res.json(manualSmsResponse(donor.phone, body));
-    }
-
-    const message = await twilioClient.messages.create({
-      from: TWILIO_PHONE_NUMBER,
-      to: donor.phone,
-      body,
-    });
-
-    return res.json({
-      success: true,
-      manual: false,
-      to: donor.phone,
-      body,
-      sid: message.sid,
-      message: "SMS sent successfully.",
-    });
+    const sms = await sendSms(donor.phone, body);
+    return res.json(sms);
   } catch (error) {
     next(error);
   }
@@ -366,28 +456,38 @@ app.post("/api/sms/alert-all", async (req, res, next) => {
       });
     }
 
-    const results = await Promise.allSettled(
-      targets.map((donor) =>
-        twilioClient.messages.create({
-          from: TWILIO_PHONE_NUMBER,
-          to: donor.phone,
-          body,
-        })
-      )
+    const results = await Promise.all(
+      targets.map(async (donor) => {
+        try {
+          const sms = await sendSms(donor.phone, body);
+          return { status: "fulfilled", donor, sms };
+        } catch (error) {
+          return { status: "rejected", donor, error };
+        }
+      })
     );
 
-    const sent = results.filter((r) => r.status === "fulfilled").length;
-    const failed = results.filter((r) => r.status === "rejected").length;
+    const sentTargets = results.filter((r) => r.status === "fulfilled");
+    const failedTargets = results.filter((r) => r.status === "rejected");
+    const sent = sentTargets.length;
+    const failed = failedTargets.length;
 
-    return res.json({
-      success: true,
+    return res.status(sent ? 200 : 502).json({
+      success: sent > 0,
       manual: false,
       sent,
       failed,
       eligible: targets.length,
       body,
-      targets: targets.map((donor) => ({ to: donor.phone })),
-      message: "SMS broadcast completed.",
+      targets: sentTargets.map((result) => ({ to: result.sms.to, sid: result.sms.sid })),
+      failures: failedTargets.map((result) => ({
+        to: normalizePhone(result.donor.phone) || result.donor.phone,
+        message: result.error.message,
+        code: result.error.twilioCode,
+      })),
+      message: sent
+        ? `SMS broadcast completed. ${sent} sent, ${failed} failed.`
+        : failedTargets[0]?.error.message || "SMS broadcast failed.",
     });
   } catch (error) {
     next(error);
@@ -459,9 +559,10 @@ app.use((req, res) => {
 
 app.use((error, req, res, next) => {
   console.error(error);
-  res.status(500).json({
+  res.status(error.statusCode || 500).json({
     success: false,
-    message: "Server error",
+    message: error.statusCode ? error.message : "Server error",
+    code: error.twilioCode,
     error: process.env.NODE_ENV === "production" ? undefined : error.message,
   });
 });
